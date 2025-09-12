@@ -4,7 +4,7 @@ SQLyog is a powerful GUI tool to manage MySQL and MariaDB servers and databases 
 
 SQLyog has no dependencies on runtimes (such as Microsoft .NET and Java) and database abstraction layers (such as ODBC and JDBC).
 
-SQLyog runs on Microsoft Windows. It may also run on Linux and Unix via Wine.
+SQLyog runs on Microsoft Windows. Parts of the source now support building on macOS, and it may also run on Linux and Unix via Wine.
 
 Users of SQLyog’s Community edition can get support through Webyog’s [forums for SQLyog](https://forums.webyog.com/forums/forum/sqlyog-2/). Webyog also maintains an extensive [FAQ for SQLyog](http://faq.webyog.com/) for frequently asked questions.
 
