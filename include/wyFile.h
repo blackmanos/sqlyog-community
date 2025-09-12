@@ -33,7 +33,28 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#ifdef _WIN32
 #include <io.h>
+#include <windows.h>
+#else
+#include <unistd.h>
+/* Provide Windows style flag aliases for non Windows builds */
+#ifndef GENERIC_READ
+#define GENERIC_READ   O_RDONLY
+#endif
+#ifndef GENERIC_WRITE
+#define GENERIC_WRITE  O_WRONLY
+#endif
+#ifndef CREATE_NEW
+#define CREATE_NEW     (O_CREAT | O_EXCL)
+#endif
+#ifndef CREATE_ALWAYS
+#define CREATE_ALWAYS  (O_CREAT | O_TRUNC)
+#endif
+#ifndef OPEN_EXISTING
+#define OPEN_EXISTING  0
+#endif
+#endif
 #include <stdio.h>
 
 //#ifdef _WIN32
@@ -94,8 +115,12 @@ public:
 	
 	/******Variables************/
 	
-	//File descripter
-	HANDLE m_hfile;
+        //File descriptor/handle
+#ifdef _WIN32
+        HANDLE m_hfile;
+#else
+        int    m_hfile;
+#endif
 	wyString m_filename;
 };
 #endif
