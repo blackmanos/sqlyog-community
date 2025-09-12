@@ -308,7 +308,6 @@ public:
 
 	///Returns the position of first occurance of search string (case insensitive)
 	/**
-	/**
     @param searchstr:  IN String to find
     @param pos		:     IN position from where we need to search
 	*/
@@ -468,7 +467,6 @@ public:
 
 	///Returns the position of first occurance of search string (case insensitive)
 	//If the 'isreverse = wyTrue', then it searches the substring from end
-	/**
 	/**
     @param searchstr	:  IN String to find
     @param pos			:     IN position from where we need to search

@@ -27,7 +27,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <locale.h>
-#include <stdarg.h>
 #include <wchar.h>
 
 #include <fcntl.h>
