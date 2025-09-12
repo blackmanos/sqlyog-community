@@ -386,7 +386,8 @@
     <ClCompile Include="..\src\UpgradeCheck.cpp" />
     <ClCompile Include="..\src\UrlEncode.cpp" />
     <ClCompile Include="..\src\UserManager.cpp" />
-    <ClCompile Include="..\src\WinMain.cpp" />
+    <ClCompile Include="..\src\AppInit.cpp" />
+    <ClCompile Include="..\src\Main.cpp" />
     <ClCompile Include="..\src\WyCrc.cpp" />
     <ClCompile Include="..\src\wyFile.cpp" />
     <ClCompile Include="..\src\wyIni.cpp" />

@@ -240,7 +240,10 @@
     <ClCompile Include="..\src\UserManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\WinMain.cpp">
+    <ClCompile Include="..\src\AppInit.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\src\WyCrc.cpp">

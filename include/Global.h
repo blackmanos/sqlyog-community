@@ -20,10 +20,18 @@
 #ifndef	_CGlobal_H_
 #define _CGlobal_H_
 
+#ifdef _WIN32
 #include <windows.h>
+#include <commctrl.h>
+#else
+typedef void* HANDLE;
+typedef void* HWND;
+typedef void* HINSTANCE;
+typedef void* HACCEL;
+#endif
+
 #include <stdio.h>
 #include <malloc.h>
-#include <commctrl.h>
 #include <mysql.h>
 #include <string>
 #include <sqlite3.h>
