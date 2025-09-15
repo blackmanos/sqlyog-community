@@ -38,7 +38,6 @@
 	#include <mysql/mysql.h>
 #endif
 
-#ifdef _MSC_VER
 #pragma warning(disable:4100)       // format parameter not USED
 #pragma warning(disable:4267)       // conversion from 'x' to 'y', possible loss of data
 #pragma warning(disable:4127)       // conditional expression is constant
@@ -49,8 +48,7 @@
 #pragma warning(disable:4018)       // '<' : signed/unsigned mismatch
 #pragma warning(disable:249)        // '==' : signed/unsigned mismatch
 #pragma warning(disable:4389)       // '!=' : signed/unsigned mismatch
-#pragma warning(disable:4800)       // forcing value to bool 'true' or 'false'
-#endif
+#pragma warning(disable:4800)       // forcing value to bool 'true' or 'false' 
 
 /*! MYSQL** pointer to MySQL pointer*/ 
 typedef MYSQL** PMYSQL;
