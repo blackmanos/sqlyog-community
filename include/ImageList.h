@@ -20,9 +20,14 @@
 #ifndef _IMAGELIST_H
 #define	_IMAGELIST_H
 
-#include <windows.h>
-#include <commctrl.h>
 #include "datatype.h"
+#ifdef _WIN32
+typedef void* HINSTANCE;
+typedef void* HIMAGELIST;
+#else
+#include <QList>
+#include <QIcon>
+#endif
 
 
 class ImageList
@@ -58,21 +63,24 @@ public:
     @param imageid		: IN Specifies the integer value to be converted.
     @returns wyTrue if user pressed OK, wyFalse if user pressed Cancel
     */
+    #ifdef _WIN32
     wyBool Add(HINSTANCE hinstance, wyUInt32 imageid);
-
-    /// Retrieves the image handle
-    /**
-    @returns HIMAGELIST, handle to image list
-    */
     HIMAGELIST GetImageHandle();
-
+    #else
+    bool Add(const QIcon& icon);
+    QList<QIcon> GetImageHandle();
+    #endif
 private:
 
+#ifdef _WIN32
     /// Image list handle
     HIMAGELIST m_himagelist;
 
     // image count;
     wyUInt32 m_imagecount;
+#else
+    QList<QIcon> m_icons;
+#endif
 };
 
 #endif

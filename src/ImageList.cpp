@@ -18,7 +18,15 @@
 
 
 #include "ImageList.h"
+#ifdef _WIN32
+#include <windows.h>
+#include <commctrl.h>
 #include "Verify.h"
+#else
+#include <QIcon>
+#endif
+
+#ifdef _WIN32
 
 ImageList::ImageList()
 {
@@ -39,13 +47,12 @@ ImageList::~ImageList()
   ImageList_Destroy(m_himagelist);
 }
 
-wyBool 
+wyBool
 ImageList::Add(HINSTANCE hinstance, wyUInt32 imageid)
 {
     HICON hicon;
-    
+
     hicon = LoadIcon(hinstance, MAKEINTRESOURCE(imageid));
-    //hicon = (HICON)::LoadImageW(hinstance, MAKEINTRESOURCE(imageid), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
     VERIFY(hicon);
 
     if(::ImageList_AddIcon(m_himagelist, hicon) == -1)
@@ -58,8 +65,42 @@ ImageList::Add(HINSTANCE hinstance, wyUInt32 imageid)
     return wyTrue;
 }
 
-HIMAGELIST 
+HIMAGELIST
 ImageList::GetImageHandle()
 {
     return m_himagelist;
 }
+
+#else
+
+ImageList::ImageList()
+{
+}
+
+ImageList::ImageList(wyInt32 width, wyInt32 height, wyUInt32 flags, wyInt32 initialsize, wyInt32 growsize)
+{
+    Q_UNUSED(width);
+    Q_UNUSED(height);
+    Q_UNUSED(flags);
+    Q_UNUSED(initialsize);
+    Q_UNUSED(growsize);
+}
+
+ImageList::~ImageList()
+{
+}
+
+bool
+ImageList::Add(const QIcon& icon)
+{
+    m_icons.append(icon);
+    return true;
+}
+
+QList<QIcon>
+ImageList::GetImageHandle()
+{
+    return m_icons;
+}
+
+#endif
