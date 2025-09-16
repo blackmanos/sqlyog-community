@@ -22,6 +22,7 @@
 #include "CommonHelper.h"
 #include "GUIHelper.h"
 #include "FrameWindowHelper.h"
+#include "AppSettings.h"
 #include "TableTabInterface.h"
 
 extern PGLOBALS		pGlobals;
@@ -1526,7 +1527,7 @@ PreferenceBase::InitOthersPrefValues()
 	SendMessage(GetDlgItem(m_hwnd, IDC_UPDATEPROMPT), BM_SETCHECK, truncdata, 0);
 
     // Iconsize combo box
-	wyIni::IniGetString(GENERALPREFA, "ToolIconSize", TOOLBARICONSIZE_DEFAULT, &tempstr, dirstr.GetString());
+	tempstr.SetAs(AppSettings::instance().toolIconSize().toUtf8().constData());
 	ret = SendMessage(GetDlgItem(m_hwnd, IDC_ICONSIZE), CB_SELECTSTRING, -1, (LPARAM)tempstr.GetAsWideChar());
 	if(ret == CB_ERR)
 		SendMessage(GetDlgItem(m_hwnd, IDC_ICONSIZE), CB_SETCURSEL, 1,(LPARAM)0);
@@ -1783,7 +1784,11 @@ PreferenceBase::SaveOthersPreferences(HWND hwndbase, wyInt32 page)
 	SetBoolProfileString(hwnd, GENERALPREF, L"ResuttabRetainsPage", IDC_RESUTTABPAGERETAIN);
 
 	// Iconsize combo box
-	SetIntProfileString(hwnd, GENERALPREF, L"ToolIconSize", IDC_ICONSIZE);
+	{
+	    wyWChar buffer[64] = {0};
+	    GetWindowText(GetDlgItem(hwnd, IDC_ICONSIZE), buffer, 64);
+	    AppSettings::instance().setToolIconSize(QString::fromWCharArray(buffer));
+	}
     
     hwndcombo = GetDlgItem(hwnd, IDC_THEMECOMBO);
 
@@ -1813,7 +1818,7 @@ PreferenceBase::SetToolBarIconSize()
 	wyString	tempiconsize;
 	MDIWindow   *pcquerywnd = NULL;
 	
-	wyIni::IniGetString(GENERALPREFA, "ToolIconSize", TOOLBARICONSIZE_DEFAULT, &iconsize, dirstr.GetString());
+	iconsize.SetAs(AppSettings::instance().toolIconSize().toUtf8().constData());
 	
 	//Get the current index of combo as per the icon size value
 	switch(pGlobals->m_pcmainwin->m_toolbariconsize)
@@ -2264,7 +2269,7 @@ PreferenceBase::SetOthersPrefDefaultValues(HWND hwnd)
 	}
 #endif
 	//Iconsize combo box
-    iconsize.SetAs(TOOLBARICONSIZE_DEFAULT);
+    iconsize.SetAs(AppSettings::instance().toolIconSize().toUtf8().constData());
 	//default theme
 	defaulttheme.SetAs("Flat");
 	SendMessage(GetDlgItem(hwnd, IDC_ICONSIZE), CB_SELECTSTRING, -1, (LPARAM)iconsize.GetAsWideChar());
@@ -2539,7 +2544,7 @@ PreferenceBase::SaveDefaultOthersPreferences()
 	wyIni::IniWriteInt(GENERALPREFA, "ResuttabRetainsPage", RESULTRETAINPAGE_DEFAULT, dirstr.GetString());
 	pGlobals->m_retainpagevalue = wyTrue;
 		
-	wyIni::IniWriteString(GENERALPREFA, "ToolIconSize", TOOLBARICONSIZE_DEFAULT, dirstr.GetString());
+	AppSettings::instance().setToolIconSize(QStringLiteral("Large"));
 	SetToolBarIconSize();
 
     if(wyTheme::GetActiveThemeInfo())

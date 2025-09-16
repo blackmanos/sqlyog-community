@@ -22,6 +22,7 @@
 #include "FrameWindowHelper.h"
 #include "ExportMultiFormat.h"
 #include "Global.h"
+#include "AppSettings.h"
 #include "Tunnel.h"			
 #include "scintilla.h"
 #include "ClientMySQLWrapper.h"
@@ -3475,31 +3476,22 @@ IsRefreshTableData()
 }
 
 //Setting the size of the tool bar icons
+
 wyInt32
 GetToolBarIconSize()
 {
-	wyWChar		*lpfileport = 0;
-	wyWChar		directory[MAX_PATH+1] = {0};
-	wyInt32		iconsize = ICON_SIZE_24;
-	wyString	dirstr;
-	wyString	iconsizestr;
+    wyInt32 iconsize = ICON_SIZE_24;
+    QString size = AppSettings::instance().toolIconSize();
 
-	//Get the complete path.
-	SearchFilePath(L"sqlyog", L".ini", MAX_PATH, directory, &lpfileport);
-	dirstr.SetAs(directory);
-	
-	wyIni::IniGetString(GENERALPREFA, "ToolIconSize", TOOLBARICONSIZE_DEFAULT, &iconsizestr, dirstr.GetString());
+    if(size.compare(QStringLiteral("Large"), Qt::CaseInsensitive) == 0)
+        iconsize = ICON_SIZE_32;
+    else if(size.compare(QStringLiteral("Small"), Qt::CaseInsensitive) == 0)
+        iconsize = ICON_SIZE_24;
+    else
+        iconsize = ICON_SIZE_28;
 
-	if(iconsizestr.CompareI("Large") == 0)
-		iconsize = ICON_SIZE_32;
-	else if(iconsizestr.CompareI("Small") == 0)
-		iconsize = ICON_SIZE_24;
-	else
-		iconsize = ICON_SIZE_28;
-	   
-	return iconsize;
+    return iconsize;
 }
-
 ///checks for Whether we will use sapces for tabs or not.
 wyBool
 IsInsertSpacesForTab()

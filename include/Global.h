@@ -81,7 +81,6 @@ class wySQLite;
 #define MNUENGINE_INDEX			20
 
 #define DEF_TAB_SIZE			8
-#define TOOLBARICONSIZE_DEFAULT	"LARGE"
 
 #define WM_SETACTIVEWINDOW      WM_USER+200
 
