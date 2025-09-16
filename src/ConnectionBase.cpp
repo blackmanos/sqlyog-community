@@ -31,6 +31,12 @@
 #include <CommCtrl.h>
 #include "CCustomComboBox.h"
 
+#include <QByteArray>
+#include <QSettings>
+#include <QString>
+#include <QUuid>
+#include <QVariant>
+
 #include <iomanip>
 #include "modes.h"
 #include "aes.h"
@@ -42,6 +48,49 @@
 #define COMUNITY_SSL	_(L"SSL Encryption (Ultimate only)")
 
 #define GETENT_DLG_TEXT _(L"Get SQLyog ULTIMATE today to enable this and dozens of other great features.")
+
+namespace
+{
+static void migrateLegacySettings(QSettings &settings)
+{
+    const QString migrationFlagKey = QStringLiteral("Migration/RegistryToIniCompleted");
+    if (settings.value(migrationFlagKey).toBool())
+    {
+        return;
+    }
+
+#ifdef _WIN32
+    const QString legacyPath = QStringLiteral("HKEY_CURRENT_USER\\%1").arg(QString::fromLatin1(REGKEY));
+    QSettings legacySettings(legacyPath, QSettings::NativeFormat);
+    const QVariant legacyValue = legacySettings.value(QString::fromLatin1(REGAPPID));
+    QString legacyUuid;
+
+    if (legacyValue.canConvert<QByteArray>())
+    {
+        legacyUuid = QString::fromLatin1(legacyValue.toByteArray());
+    }
+    else
+    {
+        legacyUuid = legacyValue.toString();
+    }
+
+    if (!legacyUuid.isEmpty())
+    {
+        settings.beginGroup(QStringLiteral("Application"));
+        settings.setValue(QStringLiteral("Uuid"), legacyUuid);
+        settings.endGroup();
+
+        legacySettings.remove(QString::fromLatin1(REGAPPID));
+        legacySettings.sync();
+        VERIFY(legacySettings.status() == QSettings::NoError);
+    }
+#endif
+
+    settings.setValue(migrationFlagKey, true);
+    settings.sync();
+    VERIFY(settings.status() == QSettings::NoError);
+}
+} // namespace
 
 ConnectionBase::ConnectionBase()
 {
@@ -2591,47 +2640,28 @@ ConnectionBase::FillAdvancedTab(HWND hwnd, ConnectionInfo *conninfo)
 VOID
 ConnectionBase::HandleApplicationUUID()
 {
-	wyChar  name[1024 + 1]={0};
-	HKEY		key;
-    DWORD       dwnametype = REG_BINARY, dwnamedata = 1024, dwdisposition;
-	UUID		uuid;
-	UCHAR		*pszUuid = 0;
+    QSettings settings(QSettings::IniFormat, QSettings::UserScope,
+                       QStringLiteral("SQLyog"), QStringLiteral("SQLyog"));
 
+    migrateLegacySettings(settings);
 
-	if(RegOpenKeyEx(HKEY_CURRENT_USER, TEXT(REGKEY), REG_OPTION_NON_VOLATILE, 
-                                      KEY_READ | KEY_WRITE, &key) != ERROR_SUCCESS)
-	{
-		VERIFY((RegCreateKeyEx(HKEY_CURRENT_USER, TEXT(REGKEY), 0, 
-								NULL, REG_OPTION_NON_VOLATILE, KEY_READ | KEY_WRITE, 
-								NULL, &key, &dwdisposition))== ERROR_SUCCESS);
-	}
+    settings.beginGroup(QStringLiteral("Application"));
+    QString uuid = settings.value(QStringLiteral("Uuid")).toString();
 
+    if (uuid.isEmpty())
+    {
+        uuid = QUuid::createUuid().toString(QUuid::WithoutBraces).toUpper();
+        settings.setValue(QStringLiteral("Uuid"), uuid);
+        settings.sync();
+        VERIFY(settings.status() == QSettings::NoError);
+    }
 
-	VERIFY((RegQueryValueEx(key, TEXT(REGAPPID), 0, &dwnametype, (UCHAR*)name, &dwnamedata)== ERROR_SUCCESS));
+    settings.endGroup();
 
-	if(strlen(name))
-	{
-		pGlobals->m_appuuid.SetAs(name);
-	}
-
-	else
-	{
-		::UuidCreate(&uuid);
-	
-		if (UuidToStringA(&uuid, &pszUuid) == RPC_S_OK) 
-		{
-			pGlobals->m_appuuid.SetAs((const wyChar*)pszUuid);
-
-			RpcStringFree((unsigned short **)&pszUuid);
-		}
-
-		VERIFY(RegSetValueEx(key, TEXT(REGAPPID), 0, REG_BINARY,
-							(UCHAR*)pGlobals->m_appuuid.GetString(), 
-							pGlobals->m_appuuid.GetLength()) == ERROR_SUCCESS);
-	}
-
-    RegCloseKey(key);
-
+    if (!uuid.isEmpty())
+    {
+        pGlobals->m_appuuid.SetAs(uuid.toUtf8().constData());
+    }
 }
 
 /*Handling MySQL tab of Connection dialog
