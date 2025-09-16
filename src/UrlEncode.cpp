@@ -20,7 +20,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include "URLEncode.h"
+#include "UrlEncode.h"
 
 #define MAX_BUFFER_SIZE 4096
 

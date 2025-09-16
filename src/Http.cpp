@@ -16,1167 +16,344 @@
 
 */
 
-#include <windows.h>
-#include <stdio.h>
-#include <assert.h>
-#include <process.h>
-#include <wchar.h>
 #include "Http.h"
-#include "Global.h"
+
 #include "UrlEncode.h"
-#include "Verify.h"
 
-#define		IGNORE_CERT         SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID
-//#define		USER_AGENT			"Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1; .NET CLR 1.1.4322)"
-//changing user agent to IE11 running in windows 8.1 in SQLyog version 12.08
-#define		USER_AGENT			   "Mozilla/5.0 (compatible, MSIE 11, Windows NT 6.3; Trident/7.0;  rv:11.0) like Gecko"
-#define     RECIEVE_TIMEOUT         28800000 //8 hrs     
+#include <QtNetwork/QNetworkReply>
+#include <QtNetwork/QNetworkRequest>
+#include <QtNetwork/QSslConfiguration>
+#include <QtNetwork/QSslError>
+#include <QtNetwork/QSslSocket>
 
-void httplog(char * buff)
-{/*
-//#ifdef _DEBUG
-//	FILE	*fp = fopen ( "E:\\http_log.log", "a" );
-//	fprintf(fp, "%s\n" , buff);
-//	fclose ( fp );
-//#endif
-*/
-}
+#include <QAuthenticator>
+#include <QEventLoop>
+#include <QObject>
+#include <QTimer>
+#include <QVariant>
 
-CHttp::CHttp ()
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+#include <limits>
+#include <string>
 
+namespace
 {
-	m_url = m_Protocol = m_HostName = m_UserName = m_Password = m_FileName = NULL;
-	m_Port = 0;
-
-	m_contenttype = NULL;
-
-	m_proxyport = 0;
-	m_isproxy = false;
-	m_proxy = m_proxyuser = m_proxypwd =NULL;
-
-	m_challenge = false;
-	m_challengename = m_challengepwd = NULL;
-
-	m_HttpOpenRequest = m_InternetConnect = m_InternetSession = NULL;
-	
-	m_timeout = GetTimeOut();
+    constexpr char USER_AGENT[] = "Mozilla/5.0 (compatible, MSIE 11, Windows NT 6.3; Trident/7.0;  rv:11.0) like Gecko";
 }
 
-CHttp::~CHttp ()
+CHttp::CHttp()
+    : m_urlSet(false),
+      m_useProxy(false),
+      m_proxyPort(0),
+      m_hasProxyCredentials(false),
+      m_hasChallenge(false),
+      m_timeout(GetTimeOut()),
+      m_lastStatusCode(0),
+      m_allowProxyAuth(false),
+      m_allowChallengeAuth(false)
 {
-	/* clean up resources */
+    QObject::connect(&m_manager,
+                     &QNetworkAccessManager::authenticationRequired,
+                     [this](QNetworkReply *, QAuthenticator *authenticator) {
+                         if (m_allowChallengeAuth && m_hasChallenge && authenticator) {
+                             authenticator->setUser(m_challengeUser);
+                             authenticator->setPassword(m_challengePassword);
+                         }
+                     });
 
-#ifdef _DEBUG2
-    wyString w;
-
-    if(m_url)
-    {
-        w.SetAs(m_url);
-        httplog(w.GetLength());
-    }
-
-    if(m_Protocol)
-    {
-        w.SetAs(m_Protocol);
-        httplog(w.GetLength());
-    }
-
-    if(m_HostName)
-    {
-        w.SetAs(m_HostName);
-        httplog(w.GetLength());
-    }
-
-    if(m_UserName)
-    {
-        w.SetAs(m_UserName);
-        httplog(w.GetLength());
-    }
-
-    if(m_Password)
-    {
-        w.SetAs(m_Password);
-        httplog(w.GetLength());
-    }
-
-    if(m_FileName)
-    {
-        w.SetAs(m_FileName);
-        httplog(w.GetLength());
-    }
-
-    if(m_proxy)
-    {
-        w.SetAs(m_proxy);
-        httplog(w.GetLength());
-    }
-
-    if(m_proxyuser)
-    {
-        w.SetAs(m_proxyuser);
-        httplog(w.GetLength());
-    }
-
-    if(m_proxypwd)
-    {
-        w.SetAs(m_proxypwd);
-        httplog(w.GetLength());
-    }
-
-    if(m_challengename)
-    {
-        w.SetAs(m_challengename);
-        httplog(w.GetLength());
-    }
-
-    if(m_challengepwd)
-    {
-        w.SetAs(m_proxypwd);
-        httplog(w.GetLength());
-    }
-
-
-#endif
-	if (m_url ) delete[] m_url;
-	if (m_Protocol ) delete[] m_Protocol;
-	if (m_HostName ) delete[] m_HostName;
-	if (m_UserName ) delete[] m_UserName;
-	if (m_Password ) delete[] m_Password;
-	if (m_FileName ) delete[] m_FileName;
-
-	if(m_contenttype) delete[] m_contenttype;
-
-	if (m_proxy ) delete[] m_proxy;
-	if (m_proxyuser ) delete[] m_proxyuser;
-	if (m_proxypwd ) delete[] m_proxypwd;
-
-	if (m_challengename ) delete[] m_challengename;
-	if (m_challengepwd ) delete[] m_challengepwd;
-
-	
-	if (m_HttpOpenRequest ) InternetCloseHandle(m_HttpOpenRequest );
-	if (m_InternetConnect ) InternetCloseHandle(m_InternetConnect );
-	if (m_InternetSession ) InternetCloseHandle(m_InternetSession );
+    QObject::connect(&m_manager,
+                     &QNetworkAccessManager::proxyAuthenticationRequired,
+                     [this](const QNetworkProxy &, QAuthenticator *authenticator) {
+                         if (m_allowProxyAuth && m_hasProxyCredentials && authenticator) {
+                             authenticator->setUser(m_proxyUser);
+                             authenticator->setPassword(m_proxyPassword);
+                         }
+                     });
 }
+
+CHttp::~CHttp() = default;
 
 DWORD
 CHttp::GetTimeOut()
 {
-	int		deftimeout  = 15000;
+    return 15000;
+}
 
-	return	deftimeout;
+void
+CHttp::ResetRequestState()
+{
+    m_lastResponse.clear();
+    m_lastHeaders.clear();
+    m_lastStatusCode = 0;
+    m_lastReasonPhrase.clear();
 }
 
 bool
-CHttp::SetUrl (wyWChar * url )
+CHttp::SetUrl(wyWChar * url)
 {
-	unsigned int	len;
-	if (!url ) return wyFalse;
-	if (m_url ) return wyFalse;
-
-	len = wcslen (url ) + 1;
-
-	m_url = new wyWChar[len];
-	wcscpy (m_url, url );
-
-	return BreakUrl ();
-}
-
-/* proxy server informations */
-
-bool
-CHttp::SetProxyInfo (bool isproxy,
-					  const wyWChar * proxy, const wyWChar * proxyuser, const wyWChar * proxypwd,
-					  int proxyport )
-{
-	m_isproxy = proxy;
-
-	if (!proxy ) return true;
-
-	if (m_proxy ) delete[] m_proxy;
-	if (m_proxyuser ) delete[] m_proxyuser;
-	if (m_proxypwd ) delete[] m_proxypwd;
-
-	/* since proxy server information is always required as host:port we join the information
-	   and keep it in the class */
-	m_proxy = new wyWChar[wcslen(proxy) + 128];		/* 128 is for port number..extra buffer */
-	
-	swprintf (m_proxy, L"%s:%d", proxy, proxyport);
-
-	m_proxyuser = new wyWChar[wcslen(proxyuser)+  1];
-	wcscpy (m_proxyuser, proxyuser );
-
-	m_proxypwd = new wyWChar[wcslen(proxypwd) + 1];
-	wcscpy (m_proxypwd, proxypwd );
-
-	m_proxyport = proxyport;
-
-	return true;
-}
-
-/* challenge/response authentication info */
-
-bool				
-CHttp::SetChallengeInfo (bool challenge, const wyWChar * username, const wyWChar * pwd )
-{
-
-	/* check for error */
-	if (!username || !pwd )
-		return false;
-
-	m_challenge = challenge;
-
-	m_challengename = new wyWChar[wcslen(username) + 1];
-	wcscpy (m_challengename, username );
-
-	m_challengepwd = new wyWChar[wcslen(pwd) + 1];
-	wcscpy (m_challengepwd, pwd );
-
-	return true;
-}
-
-bool				
-CHttp::SetContentType(const wyWChar * contenttype)
-{
-	if (m_contenttype ) return wyFalse;
-	
-	m_contenttype  = new wyWChar[wcslen(contenttype) + 1];
-	wcscpy (m_contenttype , contenttype);
-
-	return true;
-}
-
-bool
-CHttp::BreakUrl ()
-{
-    wyWChar				temp[1];
-    wyWChar				*canonicalurl;
-    DWORD				requiredlen = 1;
-    URL_COMPONENTS		urlcmp;
-    
-    urlcmp.dwStructSize = sizeof(urlcmp);
-
-	// when initialized with NULL, the members of the structure will contain the
-    // pointer to a the first char within the string. NO DYNAMIC ALLOCATION IS DONE
-    urlcmp.lpszScheme		= NULL;
-    urlcmp.lpszHostName		= NULL;
-    urlcmp.lpszUserName		= NULL;
-    urlcmp.lpszPassword		= NULL;
-    urlcmp.lpszUrlPath		= NULL;
-    urlcmp.lpszExtraInfo	= NULL;
-    // The following lines set which components will be displayed. 
-    urlcmp.dwSchemeLength	= 1;
-    urlcmp.dwHostNameLength = 1;
-    urlcmp.dwUserNameLength = 1;
-    urlcmp.dwPasswordLength = 1;
-    urlcmp.dwUrlPathLength	= 1;
-    urlcmp.dwExtraInfoLength= 1;
-
-
-    // Canonicalize URLs - remove unsafe chars    
-    // find out the space required
-    InternetCanonicalizeUrl (m_url, temp, &requiredlen, 0);
-
-    canonicalurl = new wyWChar[requiredlen + 1];
-    
-    InternetCanonicalizeUrl (m_url, canonicalurl, &requiredlen, 0);
-    canonicalurl[requiredlen] = 0;
-
-    // delete the prev url buffer and copy the new contents
-    delete[] m_url;
-    m_url = new wyWChar[requiredlen + 1];
-    wcscpy (m_url, canonicalurl );
-    delete[] canonicalurl;
-    
-    if (!InternetCrackUrl (m_url, wcslen(m_url), 0, &urlcmp ))
-	{        
-        return false;
-    }
-    else {
-
-        if (urlcmp.lpszScheme != 0) {
-            m_Protocol = new wyWChar[urlcmp.dwSchemeLength + 1];
-            wcsncpy(m_Protocol, urlcmp.lpszScheme, urlcmp.dwSchemeLength);
-            m_Protocol[urlcmp.dwSchemeLength] = 0;
-        } else
-            m_Protocol = NULL;
-        
-        if (urlcmp.lpszHostName != 0) {
-            m_HostName = new wyWChar[urlcmp.dwHostNameLength + 1];
-            wcsncpy(m_HostName, urlcmp.lpszHostName, urlcmp.dwHostNameLength);
-            m_HostName[urlcmp.dwHostNameLength] = '\0';
-        } else
-            m_HostName = NULL;
-        
-        m_Port = urlcmp.nPort;
-        
-        if (urlcmp.lpszUserName != 0) {
-            m_UserName = new wyWChar[urlcmp.dwUserNameLength + 1];
-            wcsncpy(m_UserName, urlcmp.lpszUserName, urlcmp.dwUserNameLength);
-            m_UserName[urlcmp.dwUserNameLength] = '\0';
-        } else
-            m_UserName = NULL;
-        
-        if (urlcmp.lpszPassword != 0) {
-            m_Password = new wyWChar[urlcmp.dwPasswordLength + 1];
-            wcsncpy(m_Password, urlcmp.lpszPassword, urlcmp.dwPasswordLength);
-            m_Password[urlcmp.dwPasswordLength] = '\0';
-        } else
-            m_Password = NULL;
-
-        if (urlcmp.lpszUrlPath != 0) {
-            m_FileName = new wyWChar[urlcmp.dwUrlPathLength + 1];
-            wcsncpy(m_FileName, urlcmp.lpszUrlPath, urlcmp.dwUrlPathLength);
-            m_FileName[urlcmp.dwUrlPathLength] = NULL;
-        } else
-            m_FileName = NULL;
-
-        // append querystring to urlpath
-        if (m_FileName && urlcmp.lpszExtraInfo ) {
-			wyWChar		*temp = m_FileName;
-            m_FileName = new wyWChar[urlcmp.dwUrlPathLength  + urlcmp.dwExtraInfoLength + 1];
-            wmemcpy (m_FileName, urlcmp.lpszUrlPath, urlcmp.dwUrlPathLength );
-            wmemcpy (m_FileName + urlcmp.dwUrlPathLength, urlcmp.lpszExtraInfo, urlcmp.dwExtraInfoLength );
-            m_FileName[urlcmp.dwUrlPathLength  + urlcmp.dwExtraInfoLength] = NULL;
-			delete[] temp;
-        }        
-    }
-
-	return true;
-}
-
-/* make all the connections and send the data */
-
-bool
-CHttp::SendData (char * data, unsigned long datalen, bool isbase64encoded, int * status, bool checkauth)
-{
-
-    DWORD           count = 0;
-
-	if (!data )
-		return false;
-
-	/* Alloc HINTERNET handles */
-	if ( !AllocHandles ( isbase64encoded, status, checkauth ) )
-		return false;
-
-retry:
-
-	if (!PostData(data, datalen ) )
-		return false;
-
-	if (!CheckError (status ) )
-    {
-
-        if(count < 3 )
-        {
-            count++;
-            goto retry;
-        }
-
-		return false;
-    }
-
-    count = 0;
-
-    if (*status == HTTP_STATUS_DENIED || *status == HTTP_STATUS_PROXY_AUTH_REQ ) 
-    {
-
-        count++;
-
-        if (count > 3 )
-            return false;
-
-        if (SetAuthDetails (m_HttpOpenRequest, *status ))
-            goto retry;
-
-    }
-
-	return true;
-}
-
-/* allocate various handles */
-
-bool
-CHttp::AllocHandles ( bool isbase64, int *status, bool checkauth)
-{
-
-	DWORD		flags	=	INTERNET_FLAG_RELOAD | 
-							INTERNET_FLAG_NO_CACHE_WRITE | 
-							INTERNET_FLAG_KEEP_CONNECTION;
-    unsigned long errnum;
-	DWORD rec_timeout = RECIEVE_TIMEOUT;					// override the 30 second timeout fixed in 12.11
-	wyString contenttype,contenttypestr;
-	//wyInt32     ret;
-	
-		
-
-	/* 
-		If a user has selected to use proxy server for Internet connection then we
-		create a separate handle, send a dummy request and set the username, password 
-
-		The real data connection and transfer is done in another handle */
-	
-	if (IsProxy () )
-		m_InternetSession = InternetOpen (TEXT(USER_AGENT), INTERNET_OPEN_TYPE_PROXY, GetProxy(), NULL, 0 );
-	else
-		m_InternetSession = InternetOpen (TEXT(USER_AGENT), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0 );
-	
-	if (!m_InternetSession )
-		return false;
-	InternetSetOption(m_InternetSession, INTERNET_OPTION_RECEIVE_TIMEOUT, &rec_timeout, sizeof(rec_timeout));
-	m_InternetConnect = InternetConnect (m_InternetSession, m_HostName, m_Port, m_UserName, m_Password, INTERNET_SERVICE_HTTP, 0L, 0L );
-	if (!m_InternetConnect )
-		return false;
-
-	/* set the flags for internet connection  and check if SSL required */
-	if (wcsicmp (m_Protocol, L"https" ) == 0 )
-		flags |= INTERNET_FLAG_SECURE;
-
-	/* check for proxy or password protected authentication 
-	checkauth flag tells whether its required to be authenticated 
-	*/
-	if (checkauth && !Authorize (&errnum) )
-    {
-        *status = errnum;
-		return false;
-    }
-
-	m_HttpOpenRequest = HttpOpenRequest(m_InternetConnect, L"POST", m_FileName, NULL, NULL, NULL, flags, 0L );
-	if (!m_HttpOpenRequest )
-		return false;
-
-	//Content-Type 
-	contenttype.SetAs(m_contenttype);
-	contenttypestr.Sprintf("Content-Type: %s\r\n", contenttype.GetString());
-	if (!HttpAddRequestHeaders(m_HttpOpenRequest, contenttypestr.GetAsWideChar () , (DWORD)-1, HTTP_ADDREQ_FLAG_ADD | HTTP_ADDREQ_FLAG_REPLACE ) )
-		return false;
-				
-	/*if (!HttpAddRequestHeaders(m_HttpOpenRequest, L"HTTP_USER_AGENT: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.7.5) Gecko/20041107 Firefox/1.0\r\n", (DWORD)-1, HTTP_ADDREQ_FLAG_ADD | HTTP_ADDREQ_FLAG_REPLACE ) )
-		return false;*/
-	//changing user string for avoid update your browser bug
-	if (!HttpAddRequestHeaders(m_HttpOpenRequest, L"HTTP_USER_AGENT: Mozilla/5.0 (Windows; U;Windows NT 6.3; en-US; rv:36.0) Gecko/20100101 Firefox/36.0\r\n", (DWORD)-1, HTTP_ADDREQ_FLAG_ADD | HTTP_ADDREQ_FLAG_REPLACE ) )
-		return false;
-
-	if (isbase64 ) {
-		if (!HttpAddRequestHeaders(m_HttpOpenRequest, L"Base64: yes\r\n", (DWORD)-1, HTTP_ADDREQ_FLAG_ADD | HTTP_ADDREQ_FLAG_REPLACE ) ) {
-			assert (0 );
-			return false;
-		}
-	}
-
-	return true;
-}
-
-bool CHttp::SetAuthDetails (HINTERNET hRequest, DWORD httpstatus )
-{
-
-    const unsigned long     testsize = 2048;
-	char					test[testsize]={0};
-    DWORD                   ret;
-
-    // We have to read all outstanding data on the Internet handle
-	// before we can resubmit request. Just discard the data.
-	do
-	{
-		InternetReadFile (hRequest, (LPVOID)test, testsize-1, &ret );
-	}
-	while (ret != 0 );
-
-	DWORD			usrflg, pwdflg;
-	const wyWChar	*usrname = {0}, *pwd = {0};
-
-	if (httpstatus == HTTP_STATUS_DENIED ) {
-
-		usrflg	= INTERNET_OPTION_USERNAME;
-		pwdflg	= INTERNET_OPTION_PASSWORD;
-		usrname = GetChallengeUserName();
-		pwd		= GetChallengePwd();
-
-	} else {
-
-		usrflg	= INTERNET_OPTION_PROXY_USERNAME;
-		pwdflg	= INTERNET_OPTION_PROXY_PASSWORD;
-		usrname	= GetProxyUserName ();
-		pwd		= GetProxyPwd ();
-
-	}
-
-	/* check that the information is valid */
-	if (!usrname || !pwd )
-		return false;
-
-	if (!InternetSetOption (m_InternetConnect, usrflg, (LPVOID) usrname, wcslen (usrname ) ) )
+    if (!url || m_urlSet)
         return false;
 
-	if (!InternetSetOption (m_InternetConnect, pwdflg, (LPVOID) pwd, lstrlenW (pwd ) ) )
-		return false;
+    QString urlString = QString::fromWCharArray(url);
+    QUrl parsed = QUrl::fromUserInput(urlString);
+
+    if (!parsed.isValid())
+        return false;
+
+    m_url = parsed;
+    m_urlSet = true;
+    return true;
+}
+
+bool
+CHttp::SetProxyInfo(bool isproxy,
+                    const wyWChar * proxy,
+                    const wyWChar * proxyuser,
+                    const wyWChar * proxypwd,
+                    int proxyport)
+{
+    m_useProxy = false;
+    m_proxyHost.clear();
+    m_proxyPort = 0;
+    m_hasProxyCredentials = false;
+    m_proxyUser.clear();
+    m_proxyPassword.clear();
+
+    if (!isproxy || !proxy)
+        return true;
+
+    QString host = QString::fromWCharArray(proxy);
+    if (host.isEmpty())
+        return true;
+
+    m_useProxy = true;
+    m_proxyHost = host;
+    m_proxyPort = proxyport;
+
+    if (proxyuser && proxypwd) {
+        m_proxyUser = QString::fromWCharArray(proxyuser);
+        m_proxyPassword = QString::fromWCharArray(proxypwd);
+        m_hasProxyCredentials = !m_proxyUser.isEmpty();
+    }
 
     return true;
 }
 
+bool
+CHttp::SetChallengeInfo(bool challenge, const wyWChar * username, const wyWChar * pwd)
+{
+    if (!challenge) {
+        m_hasChallenge = false;
+        m_challengeUser.clear();
+        m_challengePassword.clear();
+        return true;
+    }
 
+    if (!username || !pwd)
+        return false;
+
+    m_hasChallenge = true;
+    m_challengeUser = QString::fromWCharArray(username);
+    m_challengePassword = QString::fromWCharArray(pwd);
+
+    return true;
+}
 
 bool
-CHttp::Authorize (unsigned long *num)
+CHttp::SetContentType(const wyWChar * contenttype)
 {
-    INT						count=0;
-    DWORD					numsize = sizeof(DWORD);
-	DWORD					lasterr=0;
-	DWORD					flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_KEEP_CONNECTION;
-	HINTERNET				authrequest = NULL;
+    if (!contenttype || !m_contenttype.isEmpty())
+        return false;
 
-	/* set the flags for internet connection  and check if SSL required */
-	if (wcsicmp (m_Protocol, L"https" ) == 0 )
-		flags |= INTERNET_FLAG_SECURE;
+    m_contenttype = QString::fromWCharArray(contenttype);
+    return true;
+}
 
-	/* create a temporary internet request for proxy handling */
-	authrequest = HttpOpenRequest(m_InternetConnect, L"POST", m_FileName, NULL, NULL, NULL, flags, 0L );
-	if (!authrequest )
-		return false;
+bool
+CHttp::GetAllHeaders(wyWChar * buffer, DWORD bufsize)
+{
+    if (!buffer || bufsize == 0)
+        return false;
 
-retry:
+    const std::size_t maxChars = bufsize / sizeof(wyWChar);
 
-    /* post a dummy request to check for auth */
-	if (!yog_HttpSendRequest(&lasterr, authrequest, NULL, 0, NULL, 0) ) {
-
-        if (lasterr == ERROR_INTERNET_CLIENT_AUTH_CERT_NEEDED ) {
-
-            // Return ERROR_SUCCESS regardless of clicking on OK or Cancel
-            if(lasterr = InternetErrorDlg(GetDesktopWindow(), 
-                                    authrequest,
-                                    ERROR_INTERNET_CLIENT_AUTH_CERT_NEEDED,
-                                    FLAGS_ERROR_UI_FILTER_FOR_ERRORS       |
-                                    FLAGS_ERROR_UI_FLAGS_GENERATE_DATA     |
-                                    FLAGS_ERROR_UI_FLAGS_CHANGE_OPTIONS, 
-                                    NULL) != ERROR_SUCCESS )
-            {
-                goto cleanup;
-            } else
-			{
-                goto retry;
-			}
-        }
-		if ((lasterr == ERROR_INTERNET_INVALID_CA) ||
-            (lasterr == ERROR_INTERNET_SEC_CERT_CN_INVALID) || 
-            (lasterr == ERROR_INTERNET_SEC_CERT_DATE_INVALID )) {
-
-                DWORD flags;
-                DWORD flaglen = sizeof(flags);
-			
-			/*  this means the HTTP site is not authorised by a valid certification so we ignore it and
-				move ahead */	
-            InternetQueryOption (authrequest, INTERNET_OPTION_SECURITY_FLAGS, (LPVOID)&flags, &flaglen);
-			flags |= IGNORE_CERT;
-            if (!InternetSetOption (authrequest, INTERNET_OPTION_SECURITY_FLAGS, (LPVOID)&flags, sizeof (flags) ) )
-				goto cleanup;
-			else 
-			{
-				goto retry;
-			}
+    QString headerString;
+    if (m_lastStatusCode > 0) {
+        if (!m_lastReasonPhrase.isEmpty()) {
+            headerString += QStringLiteral("HTTP/1.1 %1 %2\r\n").arg(m_lastStatusCode).arg(m_lastReasonPhrase);
+        } else {
+            headerString += QStringLiteral("HTTP/1.1 %1\r\n").arg(m_lastStatusCode);
         }
     }
 
-    if ( !HttpQueryInfo ( authrequest, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,  (LPVOID)num, &numsize, NULL))
-        goto cleanup;
-
-	if ( *num == HTTP_STATUS_DENIED || *num == HTTP_STATUS_PROXY_AUTH_REQ )
-	{
-        count++;
-
-        if (count > 3 )
-            goto cleanup;
-
-        if (SetAuthDetails ( authrequest, *num ))
-		{
-            goto retry;
-		}
-        else
-            goto cleanup;
+    for (const QPair<QByteArray, QByteArray> &pair : m_lastHeaders) {
+        headerString += QString::fromLatin1(pair.first);
+        headerString += QStringLiteral(": ");
+        headerString += QString::fromLatin1(pair.second);
+        headerString += QStringLiteral("\r\n");
     }
 
-    InternetCloseHandle (authrequest );
-    // We don't want to descard the output
+    if (headerString.isEmpty())
+        return false;
 
-	return true;
+    std::wstring headerWide = headerString.toStdWString();
+    if (headerWide.size() + 1 > maxChars)
+        return false;
 
-cleanup:
-	InternetCloseHandle (authrequest );
-	return false;
-}
-
-/* thread and worker functions for httpsendrequest */
-/* this technique is taken from MSDN KB 224318 */
-
-BOOL
-CHttp::yog_HttpSendRequest (	DWORD       *lpdwLastError,
-                                HINTERNET	hRequest,
-								LPCTSTR		lpszHeaders,
-								DWORD		dwHeadersLength,
-								LPVOID		lpOptional,
-								DWORD		dwOptionalLength )
-{
-	HANDLE		thread;
-	unsigned	threadid;
-	DWORD		exitcode;
-
-	HTTPSENDREQUESTPARAM	param={0};
-
-	/* set the long param that wol;*/
-	param.hRequest			= hRequest;
-	param.lpszHeaders		= lpszHeaders;
-	param.dwHeadersLength	= dwHeadersLength;
-	param.lpOptional		= lpOptional;
-	param.dwOptionalLength	= dwOptionalLength;
-    param.dwLastError       = 0;
-
-	thread = (HANDLE)_beginthreadex (	
-							NULL,            // Pointer to thread security attributes
-							0,               // Initial thread stack size, in bytes
-							CHttp::worker_HttpSendRequest,// Pointer to thread function
-							&param,     // The argument for the new thread
-							0,               // Creation flags
-							&threadid      // Pointer to returned thread identifier
-						  );
-
-	if (WaitForSingleObject (thread, m_timeout ) == WAIT_TIMEOUT )
-	{
-		InternetCloseHandle(m_InternetSession);
-		m_InternetSession = NULL;
-		WaitForSingleObject (thread, INFINITE);
-		VERIFY (CloseHandle (thread ) );
-		SetLastError (ERROR_INTERNET_TIMEOUT );
-		return FALSE;
-	}
-
-    *lpdwLastError = param.dwLastError;
-	exitcode = 0;
-	if (!GetExitCodeThread(thread, &exitcode ) )
-		return FALSE;
-
-	VERIFY (CloseHandle (thread ) );
-
-	return exitcode;
-}
-
-unsigned __stdcall 
-CHttp::worker_HttpSendRequest(LPVOID  lp )
-{
-	
-    DWORD           ret;
-    
-    HTTPSENDREQUESTPARAM		*param = (HTTPSENDREQUESTPARAM*)lp;
-
-    ret = HttpSendRequest (	param->hRequest, param->lpszHeaders, param->dwHeadersLength,
-								param->lpOptional, param->dwOptionalLength );
-
-    param->dwLastError = GetLastError();
-	return ret;
-
-}
-
-char*
-CHttp::GetEncodedData (char * data, DWORD * encodeddatalen )
-{
-	*encodeddatalen = 0;
-
-	DWORD		datalen = (strlen (data ) * 3) + 1;
-	char		*encodereq = (char*) malloc (sizeof (char ) * datalen ); 
-
-	CURLEncode	encode;
-
-	if (!encode.URLEncode(data, encodereq, encodeddatalen ) )
-		goto cleanup;
-
-	return encodereq;
-
-cleanup:
-
-	free (encodereq );
-	
-	return NULL;
-}
-
-char*
-CHttp::GetEncodedData(const char * data, char * outdata, DWORD * encodeddatalen )
-{
-	char		*encodereq		= outdata;
-	DWORD		encodedlen = 0;
-	CURLEncode	encode;
-
-	if (!encode.URLEncode(data, encodereq, &encodedlen ) )
-		goto cleanup;
-	
-	if (encodeddatalen ) *encodeddatalen = encodedlen;
-
-	return outdata;
-
-cleanup:
-
-	return NULL;
+    std::wmemcpy(buffer, headerWide.c_str(), headerWide.size());
+    buffer[headerWide.size()] = L'\0';
+    return true;
 }
 
 bool
-CHttp::PostData (char * encodeddata, DWORD encodelen )
+CHttp::SendData(char * data, unsigned long datalen, bool isbase64encoded, int * status, bool checkauth)
 {
-    INTERNET_BUFFERS	bufferin;
-	DWORD				flags = IGNORE_CERT, flaglen = 0, byteswritten=0, lasterr = 0;
-   
-	memset (&bufferin, 0, sizeof(INTERNET_BUFFERS));
-    
-    bufferin.dwStructSize	= sizeof(INTERNET_BUFFERS ); 
-    bufferin.dwBufferTotal	= encodelen;
+    if ((!data && datalen) || !m_urlSet || !m_url.isValid())
+        return false;
 
-retry:
+    if (datalen > static_cast<unsigned long>(std::numeric_limits<int>::max()))
+        return false;
 
-	if (!yog_HttpSendRequestEx (m_HttpOpenRequest, &bufferin, NULL, HSR_INITIATE, 0) )
-	{
-        lasterr = GetLastError();
+    ResetRequestState();
 
+    m_allowChallengeAuth = checkauth && m_hasChallenge;
+    m_allowProxyAuth = checkauth && m_hasProxyCredentials;
 
-        if (lasterr == ERROR_INTERNET_CLIENT_AUTH_CERT_NEEDED ) {
+    QNetworkRequest request(m_url);
+    if (!m_contenttype.isEmpty())
+        request.setHeader(QNetworkRequest::ContentTypeHeader, m_contenttype);
 
-            // Return ERROR_SUCCESS regardless of clicking on OK or Cancel
-            if(InternetErrorDlg(GetDesktopWindow(), 
-                                    m_HttpOpenRequest,
-                                    ERROR_INTERNET_CLIENT_AUTH_CERT_NEEDED,
-                                    FLAGS_ERROR_UI_FILTER_FOR_ERRORS       |
-                                    FLAGS_ERROR_UI_FLAGS_GENERATE_DATA     |
-                                    FLAGS_ERROR_UI_FLAGS_CHANGE_OPTIONS, 
-                                    NULL) != ERROR_SUCCESS )
-                return false;
-            else
-                goto retry;
+    request.setHeader(QNetworkRequest::UserAgentHeader, QString::fromLatin1(USER_AGENT));
 
-        } else if (lasterr == ERROR_INTERNET_CANNOT_CONNECT ) {
-			return false;
+    if (isbase64encoded)
+        request.setRawHeader("Base64", "yes");
 
-		} else if ((lasterr == ERROR_INTERNET_INVALID_CA ) || 
-					(lasterr ==  ERROR_INTERNET_SEC_CERT_CN_INVALID ) ||
-					(lasterr == ERROR_INTERNET_SEC_CERT_DATE_INVALID )	
-				) {
-			
-				InternetQueryOption (m_HttpOpenRequest, INTERNET_OPTION_SECURITY_FLAGS,
-					 (LPVOID)&flags, &flaglen);
+    if (m_url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0) {
+        QSslConfiguration sslConfig = QSslConfiguration::defaultConfiguration();
+        sslConfig.setPeerVerifyMode(QSslSocket::VerifyNone);
+        request.setSslConfiguration(sslConfig);
+    }
 
-            flags |= IGNORE_CERT;
-            InternetSetOption (m_HttpOpenRequest, INTERNET_OPTION_SECURITY_FLAGS, &flags, sizeof(flags));
-            
-			goto retry;
-
-        } else {
-			return false;
+    if (m_useProxy) {
+        QNetworkProxy proxy(QNetworkProxy::HttpProxy, m_proxyHost, static_cast<quint16>(m_proxyPort));
+        if (checkauth && m_hasProxyCredentials) {
+            proxy.setUser(m_proxyUser);
+            proxy.setPassword(m_proxyPassword);
         }
-    }	
+        m_manager.setProxy(proxy);
+    } else {
+        QNetworkProxy proxy;
+        proxy.setType(QNetworkProxy::NoProxy);
+        m_manager.setProxy(proxy);
+    }
 
-	if (!yog_InternetWriteFile(m_HttpOpenRequest, encodeddata, encodelen, &byteswritten ) )
-		return false;
+    QByteArray payload;
+    if (datalen > 0 && data)
+        payload.append(data, static_cast<int>(datalen));
 
-	return true;
+    QNetworkReply *reply = m_manager.post(request, payload);
+
+    QObject::connect(reply, &QNetworkReply::readyRead, [this, reply]() {
+        m_lastResponse.append(reply->readAll());
+    });
+
+    QObject::connect(reply, &QNetworkReply::sslErrors, reply, &QNetworkReply::ignoreSslErrors);
+
+    bool timedOut = false;
+    QTimer timer;
+    timer.setSingleShot(true);
+    if (m_timeout > 0) {
+        QObject::connect(&timer, &QTimer::timeout, [&]() {
+            timedOut = true;
+            reply->abort();
+        });
+        timer.start(m_timeout);
+    }
+
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    if (timer.isActive())
+        timer.stop();
+
+    if (reply->bytesAvailable() > 0)
+        m_lastResponse.append(reply->readAll());
+
+    m_lastHeaders = reply->rawHeaderPairs();
+    m_lastStatusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    m_lastReasonPhrase = reply->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString();
+
+    QNetworkReply::NetworkError networkError = reply->error();
+    reply->deleteLater();
+
+    if (status)
+        *status = m_lastStatusCode;
+
+    if (timedOut)
+        return false;
+
+    return networkError == QNetworkReply::NoError;
 }
 
-/* thread and worker functions for httpsendrequestex */
-/* this technique is taken from MSDN KB 224318 */
-
-BOOL
-CHttp::yog_HttpSendRequestEx(	HINTERNET hRequest, LPINTERNET_BUFFERS lpBuffersIn, 
-								LPINTERNET_BUFFERS lpBuffersOut, 
-								DWORD dwFlags, DWORD_PTR dwContext )
+char *
+CHttp::GetResponse(bool * stop)
 {
-	HANDLE		thread;
-	unsigned	threadid;
-	DWORD		exitcode;
+    if (stop && *stop)
+        return nullptr;
 
-	HTTPSENDREQUESTEXPARAM	param={0};
+    const std::size_t length = static_cast<std::size_t>(m_lastResponse.size());
+    char *result = static_cast<char *>(std::calloc(length + 1, sizeof(char)));
 
-	/* set the long param that wol;*/
-	param.hRequest = hRequest;
-	param.lpBufferIn = lpBuffersIn;
-	param.lpBuffersOut = lpBuffersOut;
-	param.dwFlags = dwFlags;
-	param.dwContext = dwContext;
+    if (!result)
+        return nullptr;
 
-	thread = (HANDLE)_beginthreadex (	
-							NULL,            // Pointer to thread security attributes
-							0,               // Initial thread stack size, in bytes
-							CHttp::worker_HttpSendRequestEx,  // Pointer to thread function
-							&param,     // The argument for the new thread
-							0,               // Creation flags
-							&threadid      // Pointer to returned thread identifier
-						  );
+    if (length > 0)
+        std::memcpy(result, m_lastResponse.constData(), length);
 
-	if (WaitForSingleObject (thread, m_timeout ) == WAIT_TIMEOUT )
-	{
-		InternetCloseHandle(m_InternetSession);
-		m_InternetSession = NULL;
-		WaitForSingleObject (thread, INFINITE);
-		VERIFY (CloseHandle (thread ) );
-		SetLastError (ERROR_INTERNET_TIMEOUT );
-		return FALSE;
-	}
-
-	exitcode = 0;
-	if (!GetExitCodeThread(thread, &exitcode ) )
-		return FALSE;
-
-	VERIFY (CloseHandle (thread ) );
-
-	return exitcode;
+    return result;
 }
 
-unsigned __stdcall 
-CHttp::worker_HttpSendRequestEx(LPVOID  lp )
+char *
+CHttp::GetEncodedData(char * data, DWORD * encodeddatalen)
 {
-	HTTPSENDREQUESTEXPARAM		*param = (HTTPSENDREQUESTEXPARAM*)lp;
+    if (!data || !encodeddatalen)
+        return nullptr;
 
-	return HttpSendRequestEx (	param->hRequest, param->lpBufferIn, param->lpBuffersOut, 
-								param->dwFlags, param->dwContext );
+    *encodeddatalen = 0;
+    std::size_t datalen = std::strlen(data);
+
+    DWORD bufferlen = static_cast<DWORD>(datalen * 3 + 1);
+    char *encodereq = static_cast<char *>(std::malloc(sizeof(char) * bufferlen));
+    if (!encodereq)
+        return nullptr;
+
+    CURLEncode encode;
+
+    if (!encode.URLEncode(data, encodereq, encodeddatalen)) {
+        std::free(encodereq);
+        return nullptr;
+    }
+
+    return encodereq;
 }
 
-/* thread and worker functions for internetwritefile */
-/* this technique is taken from MSDN KB 224318 */
-
-BOOL
-CHttp::yog_InternetWriteFile (HINTERNET hFile, LPCVOID lpBuffer, 
-							  DWORD dwNumberOfBytesToWrite, LPDWORD lpdwNumberOfBytesWritten )
+char *
+CHttp::GetEncodedData(const char * data, char * outdata, DWORD * encodeddatalen)
 {
-	HANDLE				thread;
-	unsigned 			threadid;
-	DWORD				exitcode;
+    if (!data || !outdata)
+        return nullptr;
 
-	INTERNETWRITEFILE	param={0};
+    CURLEncode encode;
+    DWORD encodedlen = 0;
 
-	/* set the long param that wol;*/
-	param.dwNumberOfBytesToWrite = dwNumberOfBytesToWrite;
-	param.hFile = hFile;
-	param.lpBuffer = lpBuffer;
-	param.lpdwNumberOfBytesWritten = lpdwNumberOfBytesWritten;
+    if (!encode.URLEncode(data, outdata, &encodedlen))
+        return nullptr;
 
-	thread = (HANDLE)_beginthreadex (	
-							NULL,            // Pointer to thread security attributes
-							0,               // Initial thread stack size, in bytes
-							CHttp::worker_InternetWriteFile,  // Pointer to thread function
-							&param,     // The argument for the new thread
-							0,               // Creation flags
-							&threadid      // Pointer to returned thread identifier
-						  );
+    if (encodeddatalen)
+        *encodeddatalen = encodedlen;
 
-	if (WaitForSingleObject (thread, m_timeout ) == WAIT_TIMEOUT )
-	{
-		InternetCloseHandle(m_InternetSession);
-		m_InternetSession = NULL;
-		WaitForSingleObject (thread, INFINITE);
-		VERIFY (CloseHandle (thread ) );
-		SetLastError (ERROR_INTERNET_TIMEOUT );
-		return FALSE;
-	}
-
-	exitcode = 0;
-	if (!GetExitCodeThread(thread, &exitcode ) )
-		return FALSE;
-
-	VERIFY (CloseHandle (thread ) );
-
-	return exitcode;
-}
-
-unsigned __stdcall 
-CHttp::worker_InternetWriteFile(LPVOID  lp )
-{
-	INTERNETWRITEFILE		*param = (INTERNETWRITEFILE*)lp;
-
-	return InternetWriteFile (	param->hFile, param->lpBuffer, 
-								param->dwNumberOfBytesToWrite, param->lpdwNumberOfBytesWritten );
-}
-
-
-bool
-CHttp::CheckError (int * status )
-{
-	DWORD num, numsize;
-	if (!yog_HttpEndRequest (m_HttpOpenRequest, NULL, HSR_INITIATE, 0)) {
-
-        DWORD           qcode = 0;
-        DWORD           qsize = sizeof (DWORD );
-
-        // checks whether the server requires proxy auth?
-		::HttpQueryInfo (m_HttpOpenRequest, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &qcode, &qsize, NULL);
-
-        if (qcode == HTTP_STATUS_DENIED || qcode == HTTP_STATUS_PROXY_AUTH_REQ ) {
-			/* we need to show status error */
-			*status = qcode;
-			return true;
-        }
-
-		/* for other return false as they are fatal */
-		return false;
-    }    
-
-	/* get the status code */
-	numsize = sizeof(num);
-	
-	if (!::HttpQueryInfo (m_HttpOpenRequest, HTTP_QUERY_STATUS_CODE | 
-                                             HTTP_QUERY_FLAG_NUMBER,
-                (LPVOID)&num, &numsize, NULL))
-	{
-		return false;
-	}
-
-	*status = num;
-
-	return true;
-}
-
-/* thread and worker functions for httpendrequest */
-/* this technique is taken from MSDN KB 224318 */
-
-BOOL
-CHttp::yog_HttpEndRequest (	HINTERNET hRequest,  LPINTERNET_BUFFERS lpBuffersOut,
-							DWORD dwFlags,  DWORD dwContext )
-{
-	HANDLE				thread;
-	unsigned			threadid;
-	DWORD				exitcode;
-
-	HTTPENDREQUEST		param={0};
-
-	/* set the long param that wol;*/
-	param.hRequest		= hRequest;
-	param.lpBuffersOut	= lpBuffersOut;
-	param.dwFlags		= dwFlags;
-	param.dwContext		= dwContext;
-
-	thread = (HANDLE)_beginthreadex (	
-							NULL,            // Pointer to thread security attributes
-							0,               // Initial thread stack size, in bytes
-							CHttp::worker_HttpEndRequest,  // Pointer to thread function
-							&param,     // The argument for the new thread
-							0,               // Creation flags
-							&threadid      // Pointer to returned thread identifier
-						  );
-
-	if (WaitForSingleObject (thread, m_timeout ) == WAIT_TIMEOUT )
-	{
-		InternetCloseHandle(m_InternetSession);
-		m_InternetSession = NULL;
-		WaitForSingleObject (thread, INFINITE);
-		VERIFY (CloseHandle (thread ) );
-		SetLastError (ERROR_INTERNET_TIMEOUT );
-		return FALSE;
-	}
-
-	exitcode = 0;
-	if (!GetExitCodeThread(thread, &exitcode ) )
-		return FALSE;
-
-	VERIFY (CloseHandle (thread ) );
-
-	return exitcode;
-}
-
-unsigned __stdcall 
-CHttp::worker_HttpEndRequest(LPVOID  lp )
-{
-	HTTPENDREQUEST		*param = (HTTPENDREQUEST*)lp;
-
-	return HttpEndRequest (param->hRequest, param->lpBuffersOut, param->dwFlags, param->dwContext );
-}
-
-
-bool
-CHttp::ReadResponse(char ** pbuffer, DWORD * pbuffersize, bool * stop )
-{
-    char*	buffer = 0; 	    // Partial chunks returned by InternerReadFile
-	char*	finalbuffer = 0;	// The entire stream
-    char*	tempbuffer = 0;		// For lpFinalBuffer reallocation
-
-	// store the sizes of the above buffers
-	DWORD	buffersize = 0, finalbuffersize = 0, tempbuffersize = 0;
-	DWORD	downloaded = 0;	// size of data downloaded by InternetReadFile
-	
-	*pbuffer = 0;
-    *pbuffersize = 0;
-    
-    // Loop to Read data
-	do
-	{		
-		// Get the no. of bytes of data that are available to be read immediately
-		// by a subsequent call to InternetReadFile			
-
-		if (!InternetQueryDataAvailable (m_HttpOpenRequest, &buffersize, 0, 0 )) {
-
-            if (finalbuffer )
-				free(finalbuffer);
-                //delete[] finalbuffer;
-			return false;
-
-        } else {
-
-				if (buffersize == 0 )
-					break;				
-
-				// Allocate a buffer of the size returned by InternetQueryDataAvailable
-				//buffer = new char[buffersize];
-				buffer = (char*)calloc(buffersize, sizeof(char));
-				
-				/* check if the user has asked to stop the result bringing */
-				if (stop && *stop ) {
-					//delete[] buffer;
-					free(buffer);
-
-				if (finalbuffer )
-					//delete[] finalbuffer;
-					free(finalbuffer);
-
-				return NULL;
-			}
-
-			// Read the data from the HttOpenRequest Handle
-            if (!yog_InternetReadFile(m_HttpOpenRequest, buffer, buffersize, &downloaded)) {
-
-                //delete[] buffer;
-				free(buffer);
-
-                if (finalbuffer )
-                    //delete[] finalbuffer;
-					free(finalbuffer);
-
-                *pbuffer = 0;
-
-				return false;
-                    
-            } else 	{
-
-                // Downloaded with return 0 if the entire stream has been read				
-				if (downloaded == 0) break;
-				
-				// For finalbuffer reallocation, store the final buffer address and size
-				tempbuffer = finalbuffer;
-				tempbuffersize = finalbuffersize;
-
-				// Calculate the new size and reallocate final buffer 
-				finalbuffersize = buffersize + tempbuffersize;
-				
-                //finalbuffer = new char[finalbuffersize+1];
-				finalbuffer = (char*)calloc(finalbuffersize+1, sizeof(char));
-					
-				// Copy the contents of the temp buffer into final buffer
-				if (tempbuffer ) memcpy (finalbuffer, tempbuffer, tempbuffersize );
-
-				// Finally copy the current buffer received into final buffer
-				memcpy (finalbuffer + tempbuffersize, buffer, buffersize );
-
-				// clear
-                if (tempbuffer ) {
-                    //delete[] tempbuffer;
-					free(tempbuffer);
-                    tempbuffer = NULL;
-                }
-				
-                if (buffer ) {
-                    //delete[] buffer;
-					free(buffer);
-                    buffer = NULL;
-                }
-			}
-		}
-	}
-	while(true);
-
-	/* sometimes PHP might echo 0 zero bytes */
-	if (!finalbuffersize )	{
-
-		//*pbuffer = new char[1];
-		*pbuffer = (char*)calloc(1, sizeof(char));
-		*pbuffer[0] = 0;
-		*pbuffersize = 0;
-		return true;
-	}
-    
-	finalbuffer[finalbuffersize] = NULL;
-	*pbuffer = finalbuffer;
-	*pbuffersize = finalbuffersize;
-
-	return true;	
-}
-
-/* thread and worker functions for internetreadfile */
-/* this technique is taken from MSDN KB 224318 */
-
-BOOL
-CHttp::yog_InternetReadFile (HINTERNET hFile, LPVOID lpBuffer, 
-							  DWORD dwNumberOfBytesToRead, LPDWORD lpdwNumberOfBytesRead )
-{
-	HANDLE				thread;
-	unsigned			threadid;
-	DWORD				exitcode;
-
-	INTERNETREADFILE	param={0};
-
-	/* set the long param ;*/
-	param.dwNumberOfBytesToRead		= dwNumberOfBytesToRead;
-	param.hFile						= hFile;
-	param.lpBuffer					= lpBuffer;
-	param.lpdwNumberOfBytesRead		= lpdwNumberOfBytesRead;
-
-	thread = (HANDLE)_beginthreadex (	
-							NULL,            // Pointer to thread security attributes
-							0,               // Initial thread stack size, in bytes
-							CHttp::worker_InternetReadFile,  // Pointer to thread function
-							&param,     // The argument for the new thread
-							0,               // Creation flags
-							&threadid      // Pointer to returned thread identifier
-						  );
-
-	if (WaitForSingleObject (thread, m_timeout ) == WAIT_TIMEOUT )
-	{
-		InternetCloseHandle(m_InternetSession);
-		m_InternetSession = NULL;
-		WaitForSingleObject (thread, INFINITE);
-		VERIFY (CloseHandle (thread ) );
-		SetLastError (ERROR_INTERNET_TIMEOUT );
-		return FALSE;
-	}
-
-	exitcode = 0;
-	if (!GetExitCodeThread(thread, &exitcode ) )
-		return FALSE;
-
-	VERIFY (CloseHandle (thread ) );
-
-	return exitcode;
-}
-
-unsigned __stdcall 
-CHttp::worker_InternetReadFile(LPVOID  lp )
-{
-	INTERNETREADFILE		*param = (INTERNETREADFILE*)lp;
-
-	return InternetReadFile (	param->hFile, param->lpBuffer, 
-								param->dwNumberOfBytesToRead, param->lpdwNumberOfBytesRead );
-}
-
-char*
-CHttp::GetResponse(bool * stop )
-{
-	char		*response=NULL;
-	DWORD		responselen = 0;
-
-	if (!ReadResponse (&response, &responselen, stop  ) )
-		return NULL;
-
-	return response;
-}
-
-/* function returns all the headers returned by a post.
-   receives all the headers returned by the server. Each header is separated by a carriage return/line feed (CR/LF) sequence. 
-   it does only one call so it assumes that calling function passes big enuf buffer at once 
-
-   return TRUE or FALSE */
-
-bool
-CHttp::GetAllHeaders (wyWChar * buffer, DWORD bufsize )
-{
-	return (bool)::HttpQueryInfo (m_HttpOpenRequest, HTTP_QUERY_RAW_HEADERS_CRLF, (LPVOID)buffer, 
-							 &bufsize, NULL );
+    return outdata;
 }
